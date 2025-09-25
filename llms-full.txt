@@ -5040,7 +5040,7 @@ func handleCreateUser(ctx context.Context, req mcp.CallToolRequest, input UserCr
         Status:    "created",
     }
 
-    return mcp.NewToolResultJSON(output), nil
+    return mcp.NewToolResultJSON(output)
 }
 ```
 
@@ -6064,6 +6064,7 @@ Configure transport-specific options:
 httpServer := server.NewStreamableHTTPServer(s,
     server.WithEndpointPath("/mcp"),
     server.WithStateless(true),
+    server.WithTLSCert("/path/to/cert.pem", "/path/to/key.pem"),
 )
 
 if err := httpServer.Start(":8080"); err != nil {
@@ -8881,7 +8882,7 @@ func main() {
     mux := http.NewServeMux()
     
     // Add MCP endpoints
-    server.AddMCPRoutes(mux, s, "/mcp")
+    mux.Handle("/mcp", server.NewStreamableHTTPServer(s))
     
     // Add custom endpoints
     mux.HandleFunc("/api/status", handleStatus)
@@ -9008,7 +9009,7 @@ func handleStatelessTool(ctx context.Context, req mcp.CallToolRequest) (*mcp.Cal
         return nil, err
     }
     
-    return mcp.NewToolResultJSON(result), nil
+    return mcp.NewToolResultJSON(result)
 }
 
 // Use external storage for persistence

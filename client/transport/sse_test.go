@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -909,5 +910,515 @@ func TestSSEErrors(t *testing.T) {
 		case <-time.After(3 * time.Second):
 			t.Fatal("Timeout waiting for error log message")
 		}
+	})
+}
+
+func TestSSE_Start_Unauthorized_StaticToken(t *testing.T) {
+	// Create a test server that always returns 401
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("Unauthorized"))
+	}))
+	defer server.Close()
+
+	// Create SSE with static headers (no OAuth)
+	transport, err := NewSSE(server.URL, WithHeaders(map[string]string{
+		"Authorization": "Bearer static-token",
+	}))
+	if err != nil {
+		t.Fatalf("Failed to create SSE: %v", err)
+	}
+
+	// Verify OAuth is not enabled
+	if transport.IsOAuthEnabled() {
+		t.Errorf("Expected IsOAuthEnabled() to return false")
+	}
+
+	// Start should fail with ErrUnauthorized
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = transport.Start(ctx)
+
+	// Verify the error is ErrUnauthorized
+	if err == nil {
+		t.Fatalf("Expected error, got nil")
+	}
+
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Expected ErrUnauthorized, got %T: %v", err, err)
+	}
+
+	// Verify error message
+	if !strings.Contains(err.Error(), "401") {
+		t.Errorf("Expected error message to contain '401', got: %v", err)
+	}
+}
+
+func TestSSE_SendRequest_Unauthorized_StaticToken(t *testing.T) {
+	// Create a test server that:
+	// 1. Returns 200 with endpoint for SSE connection
+	// 2. Returns 401 for POST requests to endpoint
+	endpointReceived := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") == "text/event-stream" {
+			// SSE connection request - return endpoint
+			endpointURL := "http://" + r.Host + "/endpoint"
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("event: endpoint\ndata: " + endpointURL + "\n\n"))
+			endpointReceived = true
+			return
+		}
+		// Regular request to endpoint - return 401
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("Unauthorized"))
+	}))
+	defer server.Close()
+
+	// Create SSE with static headers (no OAuth)
+	transport, err := NewSSE(server.URL, WithHeaders(map[string]string{
+		"Authorization": "Bearer static-token",
+	}))
+	if err != nil {
+		t.Fatalf("Failed to create SSE: %v", err)
+	}
+
+	// Start the transport
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = transport.Start(ctx)
+	if err != nil {
+		t.Fatalf("Failed to start SSE: %v", err)
+	}
+
+	// Verify endpoint was received
+	if !endpointReceived {
+		t.Fatal("Endpoint was not received")
+	}
+
+	// Send a request
+	_, err = transport.SendRequest(context.Background(), JSONRPCRequest{
+		JSONRPC: "2.0",
+		ID:      mcp.NewRequestId(1),
+		Method:  "test",
+	})
+
+	// Verify the error is ErrUnauthorized
+	if err == nil {
+		t.Fatalf("Expected error, got nil")
+	}
+
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Expected ErrUnauthorized, got %T: %v", err, err)
+	}
+
+	// Clean up
+	transport.Close()
+}
+
+func TestSSE_SendNotification_Unauthorized_StaticToken(t *testing.T) {
+	// Create a test server that:
+	// 1. Returns 200 with endpoint for SSE connection
+	// 2. Returns 401 for POST requests to endpoint
+	endpointReceived := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") == "text/event-stream" {
+			// SSE connection request - return endpoint
+			endpointURL := "http://" + r.Host + "/endpoint"
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("event: endpoint\ndata: " + endpointURL + "\n\n"))
+			endpointReceived = true
+			return
+		}
+		// Regular request to endpoint - return 401
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte("Unauthorized"))
+	}))
+	defer server.Close()
+
+	// Create SSE with static headers (no OAuth)
+	transport, err := NewSSE(server.URL, WithHeaders(map[string]string{
+		"Authorization": "Bearer static-token",
+	}))
+	if err != nil {
+		t.Fatalf("Failed to create SSE: %v", err)
+	}
+
+	// Start the transport
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	err = transport.Start(ctx)
+	if err != nil {
+		t.Fatalf("Failed to start SSE: %v", err)
+	}
+
+	// Verify endpoint was received
+	if !endpointReceived {
+		t.Fatal("Endpoint was not received")
+	}
+
+	// Send a notification
+	err = transport.SendNotification(context.Background(), mcp.JSONRPCNotification{
+		JSONRPC: "2.0",
+		Notification: mcp.Notification{
+			Method: "test/notification",
+		},
+	})
+
+	// Verify the error is ErrUnauthorized
+	if err == nil {
+		t.Fatalf("Expected error, got nil")
+	}
+
+	if !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("Expected ErrUnauthorized, got %T: %v", err, err)
+	}
+
+	// Clean up
+	transport.Close()
+}
+
+// TestSSEHostOverride tests the Host header override functionality
+func TestSSEHostOverride(t *testing.T) {
+	// Create a test server that captures the Host header
+	var capturedHost string
+	var mu sync.Mutex
+
+	sseHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		capturedHost = r.Host
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+
+		// Send initial endpoint event
+		fmt.Fprintf(w, "event: endpoint\ndata: %s\n\n", "/message")
+		flusher.Flush()
+
+		// Keep connection open
+		<-r.Context().Done()
+	})
+
+	messageHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		response := JSONRPCResponse{
+			JSONRPC: "2.0",
+			ID:      mcp.NewRequestId(1),
+			Result:  []byte("test"),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+			return
+		}
+	})
+
+	mux := http.NewServeMux()
+	mux.Handle("/", sseHandler)
+	mux.Handle("/message", messageHandler)
+
+	testServer := httptest.NewServer(mux)
+	defer testServer.Close()
+
+	// Parse test server URL to get the actual host
+	serverURL, _ := url.Parse(testServer.URL)
+	actualHost := serverURL.Host
+
+	t.Run("Default Host (no override)", func(t *testing.T) {
+		capturedHost = ""
+		trans, err := NewSSE(testServer.URL)
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err = trans.Start(ctx)
+		require.NoError(t, err)
+		defer trans.Close()
+
+		// Host should match the actual server host
+		mu.Lock()
+		require.Equal(t, actualHost, capturedHost)
+		mu.Unlock()
+	})
+
+	t.Run("Custom Host override", func(t *testing.T) {
+		capturedHost = ""
+		customHost := "api.example.com"
+
+		trans, err := NewSSE(testServer.URL, WithHTTPHost(customHost))
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err = trans.Start(ctx)
+		require.NoError(t, err)
+		defer trans.Close()
+
+		// Host should be the custom host, not the actual server host
+		mu.Lock()
+		require.Equal(t, customHost, capturedHost)
+		require.NotEqual(t, actualHost, capturedHost)
+		mu.Unlock()
+	})
+
+	t.Run("Custom Host with port", func(t *testing.T) {
+		capturedHost = ""
+		customHost := "backend.internal.com:8443"
+
+		trans, err := NewSSE(testServer.URL, WithHTTPHost(customHost))
+		require.NoError(t, err)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err = trans.Start(ctx)
+		require.NoError(t, err)
+		defer trans.Close()
+
+		// Host should be the custom host with port
+		mu.Lock()
+		require.Equal(t, customHost, capturedHost)
+		mu.Unlock()
+	})
+
+	// Test WithHTTPHost function directly (unit test)
+	t.Run("WithHTTPHost function", func(t *testing.T) {
+		sse := &SSE{}
+		customHost := "test.example.com"
+
+		option := WithHTTPHost(customHost)
+		option(sse)
+
+		require.Equal(t, customHost, sse.host)
+
+		// Test overwrite
+		newHost := "new.example.com"
+		option = WithHTTPHost(newHost)
+		option(sse)
+
+		require.Equal(t, newHost, sse.host)
+
+		// Test empty string
+		option = WithHTTPHost("")
+		option(sse)
+
+		require.Equal(t, "", sse.host)
+	})
+}
+
+func TestSSE_SendRequest_Timeout(t *testing.T) {
+	t.Run("TimeoutWhenServerNeverResponds", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Accept") == "text/event-stream" {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				flusher, _ := w.(http.Flusher)
+				fmt.Fprintf(w, "event: endpoint\ndata: /message\n\n")
+				flusher.Flush()
+				<-r.Context().Done()
+				return
+			}
+
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
+		}))
+		defer server.Close()
+
+		transport, err := NewSSE(server.URL)
+		require.NoError(t, err)
+		defer transport.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err = transport.Start(ctx)
+		require.NoError(t, err)
+
+		requestCtx, requestCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer requestCancel()
+
+		request := JSONRPCRequest{
+			JSONRPC: "2.0",
+			ID:      mcp.NewRequestId(int64(1)),
+			Method:  "test/timeout",
+		}
+
+		startTime := time.Now()
+		_, err = transport.SendRequest(requestCtx, request)
+		duration := time.Since(startTime)
+
+		require.Error(t, err, "Expected timeout error")
+		errMsg := err.Error()
+		require.True(t,
+			strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "deadline exceeded"),
+			"Error should mention timeout or deadline, got: %v", err)
+		expectedTimeout := 2 * time.Second
+		require.GreaterOrEqual(t, duration, expectedTimeout*7/10) // 70% of expected
+		require.LessOrEqual(t, duration, expectedTimeout*13/10)   // 130% of expected
+	})
+
+	t.Run("ContextDeadlineTakesPrecedence", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Accept") == "text/event-stream" {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				flusher, _ := w.(http.Flusher)
+				fmt.Fprintf(w, "event: endpoint\ndata: /message\n\n")
+				flusher.Flush()
+				<-r.Context().Done()
+				return
+			}
+
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
+		}))
+		defer server.Close()
+
+		transport, err := NewSSE(server.URL)
+		require.NoError(t, err)
+		defer transport.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err = transport.Start(ctx)
+		require.NoError(t, err)
+
+		requestCtx, requestCancel := context.WithTimeout(context.Background(), 1*time.Second)
+		defer requestCancel()
+
+		request := JSONRPCRequest{
+			JSONRPC: "2.0",
+			ID:      mcp.NewRequestId(int64(1)),
+			Method:  "test/deadline",
+		}
+
+		startTime := time.Now()
+		_, err = transport.SendRequest(requestCtx, request)
+		duration := time.Since(startTime)
+
+		require.Error(t, err)
+		errMsg := err.Error()
+		require.True(t,
+			strings.Contains(errMsg, "timeout") || strings.Contains(errMsg, "deadline exceeded"),
+			"Error should mention timeout or deadline, got: %v", err)
+		require.LessOrEqual(t, duration, 1500*time.Millisecond, "Should respect context deadline of 1s")
+	})
+
+	t.Run("TimeoutCleansUpResponseChannel", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Accept") == "text/event-stream" {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				flusher, _ := w.(http.Flusher)
+				fmt.Fprintf(w, "event: endpoint\ndata: /message\n\n")
+				flusher.Flush()
+				<-r.Context().Done()
+				return
+			}
+
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
+		}))
+		defer server.Close()
+
+		transport, err := NewSSE(server.URL)
+		require.NoError(t, err)
+		defer transport.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err = transport.Start(ctx)
+		require.NoError(t, err)
+
+		transport.mu.RLock()
+		initialCount := len(transport.responses)
+		transport.mu.RUnlock()
+		require.Equal(t, 0, initialCount)
+
+		requestCtx, requestCancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+		defer requestCancel()
+
+		request := JSONRPCRequest{
+			JSONRPC: "2.0",
+			ID:      mcp.NewRequestId(int64(999)),
+			Method:  "test/timeout",
+		}
+
+		_, err = transport.SendRequest(requestCtx, request)
+		require.Error(t, err)
+
+		time.Sleep(50 * time.Millisecond)
+
+		transport.mu.RLock()
+		finalCount := len(transport.responses)
+		transport.mu.RUnlock()
+
+		require.Equal(t, 0, finalCount)
+	})
+
+	t.Run("AlreadyExpiredDeadline", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Accept") == "text/event-stream" {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.WriteHeader(http.StatusOK)
+				flusher, _ := w.(http.Flusher)
+				fmt.Fprintf(w, "event: endpoint\ndata: /message\n\n")
+				flusher.Flush()
+				<-r.Context().Done()
+				return
+			}
+
+			if r.Method == http.MethodPost {
+				w.WriteHeader(http.StatusAccepted)
+				return
+			}
+		}))
+		defer server.Close()
+
+		transport, err := NewSSE(server.URL)
+		require.NoError(t, err)
+		defer transport.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		err = transport.Start(ctx)
+		require.NoError(t, err)
+
+		expiredCtx, expiredCancel := context.WithDeadline(context.Background(), time.Now().Add(-1*time.Second))
+		defer expiredCancel()
+
+		request := JSONRPCRequest{
+			JSONRPC: "2.0",
+			ID:      mcp.NewRequestId(int64(1)),
+			Method:  "test/expired",
+		}
+
+		_, err = transport.SendRequest(expiredCtx, request)
+
+		require.Error(t, err)
+		require.True(t, errors.Is(err, context.DeadlineExceeded),
+			"Expected context.DeadlineExceeded, got: %v", err)
 	})
 }

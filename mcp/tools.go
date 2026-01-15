@@ -571,6 +571,10 @@ type Tool struct {
 	RawOutputSchema json.RawMessage `json:"-"` // Hide this from JSON marshaling
 	// Optional properties describing tool behavior
 	Annotations ToolAnnotation `json:"annotations"`
+	// Support for deferred loading
+	DeferLoading bool `json:"defer_loading,omitempty"`
+	// Icons provides visual identifiers for the tool
+	Icons []Icon `json:"icons,omitempty"`
 }
 
 // GetName returns the name of the tool.
@@ -613,9 +617,17 @@ func (t Tool) MarshalJSON() ([]byte, error) {
 
 	m["annotations"] = t.Annotations
 
+	if t.DeferLoading {
+		m["defer_loading"] = t.DeferLoading
+	}
+
 	// Marshal Meta if present
 	if t.Meta != nil {
 		m["_meta"] = t.Meta
+	}
+
+	if t.Icons != nil {
+		m["icons"] = t.Icons
 	}
 
 	return json.Marshal(m)
@@ -623,10 +635,11 @@ func (t Tool) MarshalJSON() ([]byte, error) {
 
 // ToolArgumentsSchema represents a JSON Schema for tool arguments.
 type ToolArgumentsSchema struct {
-	Defs       map[string]any `json:"$defs,omitempty"`
-	Type       string         `json:"type"`
-	Properties map[string]any `json:"properties,omitempty"`
-	Required   []string       `json:"required,omitempty"`
+	Defs                 map[string]any `json:"$defs,omitempty"`
+	Type                 string         `json:"type"`
+	Properties           map[string]any `json:"properties,omitempty"`
+	Required             []string       `json:"required,omitempty"`
+	AdditionalProperties any            `json:"additionalProperties,omitempty"`
 }
 
 type ToolInputSchema ToolArgumentsSchema // For retro-compatibility
@@ -648,6 +661,10 @@ func (tis ToolArgumentsSchema) MarshalJSON() ([]byte, error) {
 
 	if len(tis.Required) > 0 {
 		m["required"] = tis.Required
+	}
+
+	if tis.AdditionalProperties != nil {
+		m["additionalProperties"] = tis.AdditionalProperties
 	}
 
 	return json.Marshal(m)
@@ -755,6 +772,14 @@ func WithDescription(description string) ToolOption {
 	}
 }
 
+// WithDeferLoading sets the defer_loading flag for the tool.
+// This is used to implement dynamic tool loading/searching patterns.
+func WithDeferLoading(deferLoading bool) ToolOption {
+	return func(t *Tool) {
+		t.DeferLoading = deferLoading
+	}
+}
+
 // WithInputSchema creates a ToolOption that sets the input schema for a tool.
 // It accepts any Go type, usually a struct, and automatically generates a JSON schema from it.
 func WithInputSchema[T any]() ToolOption {
@@ -782,6 +807,14 @@ func WithInputSchema[T any]() ToolOption {
 
 		t.InputSchema.Type = ""
 		t.RawInputSchema = json.RawMessage(mcpSchema)
+	}
+}
+
+// WithToolIcons adds icons to the Tool.
+// Icons provide visual identifiers for the tool.
+func WithToolIcons(icons ...Icon) ToolOption {
+	return func(t *Tool) {
+		t.Icons = icons
 	}
 }
 
@@ -888,6 +921,15 @@ func WithIdempotentHintAnnotation(value bool) ToolOption {
 func WithOpenWorldHintAnnotation(value bool) ToolOption {
 	return func(t *Tool) {
 		t.Annotations.OpenWorldHint = &value
+	}
+}
+
+// WithSchemaAdditionalProperties sets the additionalProperties field on the tool's input schema.
+// It accepts false (disallow extra properties), true (allow any), or a schema map
+// to validate additional properties against.
+func WithSchemaAdditionalProperties(schema any) ToolOption {
+	return func(t *Tool) {
+		t.InputSchema.AdditionalProperties = schema
 	}
 }
 

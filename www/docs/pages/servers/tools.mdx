@@ -24,6 +24,24 @@ tool := mcp.NewTool("calculate",
 
 ## Tool Definition
 
+### Tool Icons
+
+Tools can include visual identifiers using icons. Icons must use HTTPS or data URIs:
+
+```go
+tool := mcp.NewTool("calculate",
+    mcp.WithDescription("Perform arithmetic operations"),
+    mcp.WithToolIcons(
+        mcp.Icon{
+            Src:      "https://example.com/icons/calculator.png",
+            MIMEType: "image/png",
+            Sizes:    []string{"32x32", "64x64"},
+        },
+    ),
+    // ... parameters
+)
+```
+
 ### Parameter Types
 
 MCP-Go supports various parameter types with validation:
@@ -911,7 +929,8 @@ func handleGetAnnotatedResourceTool(ctx context.Context, req mcp.CallToolRequest
 	// Create resource link with annotations
 	annotated := mcp.Annotated{
 		Annotations: &mcp.Annotations{
-			Audience: []mcp.Role{mcp.RoleUser},
+			Audience:     []mcp.Role{mcp.RoleUser},
+			LastModified: "2025-01-12T15:00:58Z",
 		},
 	}
 	url := "file://documents/test.pdf"

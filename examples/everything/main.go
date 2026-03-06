@@ -32,7 +32,6 @@ const (
 )
 
 func NewMCPServer() *server.MCPServer {
-
 	hooks := &server.Hooks{}
 
 	hooks.AddBeforeAny(func(ctx context.Context, id any, method mcp.MCPMethod, message any) {
@@ -55,7 +54,7 @@ func NewMCPServer() *server.MCPServer {
 	hooks.AddAfterInitialize(func(ctx context.Context, id any, message *mcp.InitializeRequest, result *mcp.InitializeResult) {
 		fmt.Printf("afterInitialize: %v, %v, %v\n", id, message, result)
 	})
-	hooks.AddAfterCallTool(func(ctx context.Context, id any, message *mcp.CallToolRequest, result *mcp.CallToolResult) {
+	hooks.AddAfterCallTool(func(ctx context.Context, id any, message *mcp.CallToolRequest, result any) {
 		fmt.Printf("afterCallTool: %v, %v, %v\n", id, message, result)
 	})
 	hooks.AddBeforeCallTool(func(ctx context.Context, id any, message *mcp.CallToolRequest) {
@@ -209,7 +208,7 @@ func handleGetResourceLinkTool(
 
 func generateResources() []mcp.Resource {
 	resources := make([]mcp.Resource, 100)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		uri := fmt.Sprintf("test://static/resource/%d", i+1)
 		if i%2 == 0 {
 			resources[i] = mcp.Resource{
@@ -285,7 +284,7 @@ func handleGeneratedResource(
 			mcp.BlobResourceContents{
 				URI:      uri,
 				MIMEType: "application/octet-stream",
-				Blob:     base64.StdEncoding.EncodeToString([]byte(fmt.Sprintf("Binary content for resource %d", num))),
+				Blob:     base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "Binary content for resource %d", num)),
 			},
 		}, nil
 	}
@@ -391,7 +390,6 @@ func handleSendNotification(
 	ctx context.Context,
 	request mcp.CallToolRequest,
 ) (*mcp.CallToolResult, error) {
-
 	server := server.ServerFromContext(ctx)
 
 	err := server.SendNotificationToClient(

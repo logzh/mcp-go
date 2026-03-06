@@ -357,7 +357,7 @@ func TestStreamableHTTP(t *testing.T) {
 		responses := make([]*JSONRPCResponse, numRequests)
 		errors := make([]error, numRequests)
 
-		for i := 0; i < numRequests; i++ {
+		for i := range numRequests {
 			wg.Add(1)
 			go func(idx int) {
 				defer wg.Done()
@@ -386,7 +386,7 @@ func TestStreamableHTTP(t *testing.T) {
 		wg.Wait()
 
 		// Check results
-		for i := 0; i < numRequests; i++ {
+		for i := range numRequests {
 			if errors[i] != nil {
 				t.Errorf("Request %d failed: %v", i, errors[i])
 				continue
@@ -985,6 +985,36 @@ func TestStreamableHTTP_SendNotification_Unauthorized_StaticToken(t *testing.T) 
 
 	if !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("Expected ErrUnauthorized, got %T: %v", err, err)
+	}
+}
+
+// TestStreamableHTTP_SendNotification_Accepts204NoContent verifies that SendNotification
+// treats HTTP 204 No Content as a success response per RFC 7231.
+// See: https://github.com/mark3labs/mcp-go/issues/700
+func TestStreamableHTTP_SendNotification_Accepts204NoContent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	transport, err := NewStreamableHTTP(server.URL)
+	if err != nil {
+		t.Fatalf("Failed to create StreamableHTTP: %v", err)
+	}
+
+	if err := transport.Start(context.Background()); err != nil {
+		t.Fatalf("Failed to start transport: %v", err)
+	}
+
+	err = transport.SendNotification(context.Background(), mcp.JSONRPCNotification{
+		JSONRPC: "2.0",
+		Notification: mcp.Notification{
+			Method: "notifications/initialized",
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("SendNotification should accept 204 No Content, got error: %v", err)
 	}
 }
 

@@ -547,10 +547,10 @@ func (c *StreamableHTTP) readSSE(ctx context.Context, reader io.ReadCloser, hand
 				continue
 			}
 
-			if strings.HasPrefix(line, "event:") {
-				event = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
-			} else if strings.HasPrefix(line, "data:") {
-				data = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			if eventStr, ok := strings.CutPrefix(line, "event:"); ok {
+				event = strings.TrimSpace(eventStr)
+			} else if dataStr, ok := strings.CutPrefix(line, "data:"); ok {
+				data = strings.TrimSpace(dataStr)
 			}
 		}
 	}
@@ -573,17 +573,17 @@ func (c *StreamableHTTP) SendNotification(ctx context.Context, notification mcp.
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
-		// Handle unauthorized error
-		if resp.StatusCode == http.StatusUnauthorized {
-			if c.oauthHandler != nil {
-				return &OAuthAuthorizationRequiredError{
-					Handler: c.oauthHandler,
-				}
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusAccepted, http.StatusNoContent:
+		return nil
+	case http.StatusUnauthorized:
+		if c.oauthHandler != nil {
+			return &OAuthAuthorizationRequiredError{
+				Handler: c.oauthHandler,
 			}
-			return ErrUnauthorized
 		}
-
+		return ErrUnauthorized
+	default:
 		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf(
 			"notification failed with status %d: %s",
@@ -591,8 +591,6 @@ func (c *StreamableHTTP) SendNotification(ctx context.Context, notification mcp.
 			body,
 		)
 	}
-
-	return nil
 }
 
 func (c *StreamableHTTP) SetNotificationHandler(handler func(mcp.JSONRPCNotification)) {
